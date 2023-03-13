@@ -42,7 +42,7 @@ if [ -n "$filename" ]; then
   if [ -f "$filename" ]; then
 
     $EDITOR "$filename"
-    sed -i "/FILES/a $filename | $(date +'%Y-%m-%d')" "$mole_rc/mole_rc"
+    echo "$(awk '1;/FILES/{ print "'"$filename"' | '"$(date +%Y-%m-%d)"'"}' "$mole_rc/mole_rc")" > "$mole_rc/mole_rc"
     exit
 
   else
@@ -99,14 +99,14 @@ groups(){
 
     else
 
-      sed -i "/#$group_arg/a $filename" "$mole_rc/mole_rc"
+      echo "$(awk '1;/'"#$group_arg"'/{ print "'"$filename"'"}' "$mole_rc/mole_rc")" > "$mole_rc/mole_rc"
 
     fi
 
   else
 
-    sed -i "/GROUPS/a #$group_arg" "$mole_rc/mole_rc"
-    sed -i "/#$group_arg/a $filename" "$mole_rc/mole_rc"
+      echo "$(awk '1;/GROUPS/{ print "#'"$group_arg"'"}' "$mole_rc/mole_rc")" > "$mole_rc/mole_rc"
+      echo "$(awk '1;/'"#$group_arg"'/{ print "'"$filename"'"}' "$mole_rc/mole_rc")" > "$mole_rc/mole_rc"
 
   fi
 
@@ -315,22 +315,22 @@ parse_args() {
         ;;
       *)
 
-        if [ -f "$1" ] && [ -n "$group" ]; then
+        if [ -f "$1" ] && [ -n "$group_arg" ]; then
 
           filename=$(readlink -f "$1")
           groups
 
-        elif [ -d "$1" ] && [ -n "$group" ]; then
+        elif [ -d "$1" ] && [ -n "$group_arg" ]; then
 
           directory="$1"
           mode_open
 
-        elif [ -f "$1" ] && [ -z "$group" ]; then
+        elif [ -f "$1" ] && [ -z "$group_arg" ]; then
 
           filename=$(readlink -f "$1")
           open_file
 
-        elif [ -d "$1" ] && [ -z "$group" ]; then
+        elif [ -d "$1" ] && [ -z "$group_arg" ]; then
 
           directory="$1"
           mode_open
