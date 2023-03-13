@@ -3,10 +3,9 @@
 ## Default values
 directory=$(pwd)
 mode="last"
-group=""
-filename=""
-EDITOR="${EDITOR:-${VISUAL:-nano}}"
-mole_rc="$directory/.config/"
+export EDITOR="${EDITOR:-${VISUAL:-nano}}"
+export mole_rc="$directory/.config"
+export POSIXLY_CORRECT=YES
 
 if [ ! -d "$mole_rc" ]; then
 
@@ -43,12 +42,12 @@ if [ -n "$filename" ]; then
   if [ -f "$filename" ]; then
 
     $EDITOR "$filename"
-    awk '1;/FILES/{ print "'"$filename"' | '"$(date +%Y-%m-%d)"'"}' "$mole_rc/mole_rc" > "$mole_rc/mole_rc".tmp && mv "$mole_rc/mole_rc".tmp "$mole_rc/mole_rc"
+    sed -i "/FILES/a $filename | $(date +'%Y-%m-%d')" "$mole_rc/mole_rc"
     exit
 
   else
 
-    echo "File doesnt exist"
+    echo "File doesn't exist"
     exit
 
   fi
@@ -59,7 +58,7 @@ fi
 
 groups(){
 
-  if [ -z "$group" ]; then
+  if [ -z "$group_arg" ]; then
     echo "No group specified"
     exit
   fi
@@ -69,15 +68,15 @@ groups(){
     exit
   fi
 
-  if grep -Fxq "#$group" "$mole_rc/mole_rc"; then
+  if grep -Fxq "#$group_arg" "$mole_rc/mole_rc"; then
 
     groups=$(awk '/GROUPS/{flag=1;next}/FILES/{flag=0}flag' "$mole_rc/mole_rc")
 
     for group_i in $groups; do
 
-      if [ "$group_i" = "#$group" ]; then
+      if [ "$group_i" = "#$group_arg" ]; then
 
-        filenames=$(awk '/#'"$group"'/{flag=1;next}/(FILES|#)/{flag=0}flag' "$mole_rc/mole_rc")
+        filenames=$(awk '/#'"$group_arg"'/{flag=1;next}/(FILES|#)/{flag=0}flag' "$mole_rc/mole_rc")
 
         for filename_j in $filenames; do
 
@@ -96,20 +95,22 @@ groups(){
 
     if [ "$find" = "1" ]; then
 
-      echo "File already exists in group '$group'"
+      echo "File already exists in group '$group_arg'"
 
     else
 
-      awk "1;/#${group//\//\\/}/{ print \"$filename\"}" "$mole_rc/mole_rc" > "$mole_rc/mole_rc".tmp && mv "$mole_rc/mole_rc".tmp "$mole_rc/mole_rc"
+      sed -i "/#$group_arg/a $filename" "$mole_rc/mole_rc"
 
     fi
 
   else
 
-    awk '1;/GROUPS/{ print "#'"$group"'"}' "$mole_rc/mole_rc" > "$mole_rc/mole_rc".tmp && mv "$mole_rc/mole_rc".tmp "$mole_rc/mole_rc"
-    awk '1;/'"#$group"'/{ print "'"$filename"'"}' "$mole_rc/mole_rc" > "$mole_rc/mole_rc".tmp && mv "$mole_rc/mole_rc".tmp "$mole_rc/mole_rc"
+    sed -i "/GROUPS/a #$group_arg" "$mole_rc/mole_rc"
+    sed -i "/#$group_arg/a $filename" "$mole_rc/mole_rc"
 
   fi
+
+  open_file
 
 }
 
@@ -145,44 +146,54 @@ list_group(){
 
     fi
 
+    if [ -n "$group_arg" ]; then
+
+      target_groups=$(echo "$group_arg" | awk -F"," '{for(i=1;i<=NF;i++) print $i}')
+
+    fi
+
     for target in "$directory"/*; do
 
       for file in $files; do
 
         if [ "$file" = "$target" ]; then
 
-          if grep -Fxq "#$group" "$mole_rc/mole_rc"; then
+          for target_group in $target_groups; do
 
-            groups=$(awk '/GROUPS/{flag=1;next}/FILES/{flag=0}flag' "$mole_rc/mole_rc")
+            if grep -Fxq "#$target_group" "$mole_rc/mole_rc"; then
 
-            for group_i in $groups; do
+              groups=$(awk '/GROUPS/{flag=1;next}/FILES/{flag=0}flag' "$mole_rc/mole_rc")
 
-              if [ "$group_i" = "#$group" ]; then
+              for group_i in $groups; do
 
-                filenames=$(awk '/#'"$group"'/{flag=1;next}/(FILES|#)/{flag=0}flag' "$mole_rc/mole_rc")
+                if [ "$group_i" = "#$target_group" ]; then
 
-                for filename_j in $filenames; do
+                  filenames=$(awk '/#'"$target_group"'/{flag=1;next}/(FILES|#)/{flag=0}flag' "$mole_rc/mole_rc")
 
-                  if [ "$filename_j" = "$target" ]; then
+                  for filename_j in $filenames; do
 
-                    find="1"
-                    break
+                    if [ "$filename_j" = "$target" ]; then
 
-                  fi
+                      find="1"
+                      break
 
-                done
+                    fi
 
-              fi
+                  done
 
-            done
+                    if [ "$find" != "1" ]; then
 
-            if [ "$find" != "1" ]; then
+                    continue 3
 
-              continue
+                    fi
+
+                fi
+
+              done
 
             fi
 
-          fi
+          done
 
           printf '%-15s :' "$(basename "$target")"
 
@@ -198,7 +209,7 @@ list_group(){
 
                 if [ "$filename" = "$target" ]; then
 
-                  printf '%s' " $group_i" | sed 's/#//g'
+                  printf '%s' " $group_i |" | sed 's/#//g'
 
                   found=1
 
@@ -241,17 +252,28 @@ parse_args() {
 
       -g)
 
-        group="$2"
-        filename=$(readlink -f "$3")
-        groups
+        group_arg="$2"
         shift
         ;;
 
       -m)
 
-        mode="$2"
+        mode="most"
         shift
         ;;
+
+      -a)
+
+        start_date="$2"
+        shift
+        ;;
+
+      -b)
+
+          end_date="$2"
+          shift
+          ;;
+
 
       list)
         while [ $# -gt 0 ]; do
@@ -260,7 +282,7 @@ parse_args() {
 
             -g)
 
-              group="$2"
+              group_arg="$2"
               shift
               ;;
 
@@ -293,14 +315,29 @@ parse_args() {
         ;;
       *)
 
-        if [ -f "$1" ]; then
+        if [ -f "$1" ] && [ -n "$group" ]; then
+
+          filename=$(readlink -f "$1")
+          groups
+
+        elif [ -d "$1" ] && [ -n "$group" ]; then
+
+          directory="$1"
+          mode_open
+
+        elif [ -f "$1" ] && [ -z "$group" ]; then
 
           filename=$(readlink -f "$1")
           open_file
 
-        else
+        elif [ -d "$1" ] && [ -z "$group" ]; then
 
           directory="$1"
+          mode_open
+
+        else
+
+          echo "Invalid argument: $1"
 
         fi
         ;;
