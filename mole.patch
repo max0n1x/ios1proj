@@ -1,0 +1,80 @@
+--- mole	2023-04-20 17:31:23
++++ mole.new	2023-04-27 00:17:09
+@@ -15,14 +15,21 @@
+ 
+ ## Check if $MOLE_RC is set, if not - error
+ if [ -z "$MOLE_RC" ]; then
+-  echo "MOLE_RC not set"<&2
++  echo "MOLE_RC not set" >&2
+   exit 1
+ fi
+ 
+ export POSIXLY_CORRECT=YES
++export LC_ALL=C
+ 
+ ## Checkn if file $MOLE_RC exists, if not - create it and directories if needed
+ if [ -f "$(realpath "$MOLE_RC")" ]; then
++    if ! grep -Fxq "GROUPS" "$MOLE_RC"; then
++      echo "GROUPS" >> "$MOLE_RC"
++    fi
++    if ! grep -Fxq "FILES" "$MOLE_RC"; then
++      echo "FILES" >> "$MOLE_RC"
++    fi
+     mole_rc=$(realpath "$MOLE_RC")
+ else
+   mkdir -p "$(dirname "$MOLE_RC")"
+@@ -358,6 +365,7 @@
+       mkdir -p "$(dirname "$log_name")"
+     fi
+ 
++    touch "$log_name"
+     ## Filter files by date
+     if [ -z "$start_date" ] && [ -n "$end_date" ]; then
+           tmp=$(awk '/FILES/{flag=1;next}/END/{flag=0}flag' "$mole_rc" |
+@@ -381,19 +389,19 @@
+ 
+     ## Check if files were found
+     if [ -z "$tmp" ]; then
+-      echo "" | bzip2 - > "$log_name"
++      echo "" | bzip2 >> "$log_name"
+       exit 1
+     fi
+ 
+     ## Sort the files lexicographically
+-    sorted=$(echo "$tmp" | awk -F";" '{for(i=1;i<=NF;i++) print $1}' | awk '{print $1}' | sort -rn | uniq)
++    sorted=$(echo "$tmp" | awk -F";" '{for(i=1;i<=NF;i++) print $1}' | sort -f | uniq)
+     logs=""
+ 
+     ## Get the logs from all directories
+     if [ -z "$dirs" ]; then
+       for i in $sorted; do
+         j="$i"
+-        log_file=$(echo "$tmp" | awk -F";" -v i="$i" '$1==i{print $2"_"$3}' | sort -rn )
++        log_file=$(echo "$tmp" | awk -F";" -v i="$i" '$1==i{print $2"_"$3}' | sort )
+           for k in $log_file; do
+             j="$j;$k"
+           done
+@@ -410,7 +418,7 @@
+               fi
+ 
+               j="$i"
+-              log_file=$(echo "$tmp" | awk -F";" -v i="$k" '$1==i{print $2"_"$3}' | sort -rn )
++              log_file=$(echo "$tmp" | awk -F";" -v i="$k" '$1==i{print $2"_"$3}' | sort )
+ 
+               for s in $log_file; do
+                 j="$j;$s"
+@@ -424,12 +432,12 @@
+       done
+     else
+       ## If no logs were found exit
+-      echo "" | bzip2 - > "$log_name"
++      echo "" | bzip2 >> "$log_name"
+       exit 1
+     fi
+ 
+     ## Create a bz2 file with the logs
+-    echo "$logs" | grep -v '^$' | bzip2 - > "$log_name"
++    echo "$logs" | grep -v '^$' | bzip2 >> "$log_name"
+ }
+ 
+ ## Parse the arguments

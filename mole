@@ -1,0 +1,517 @@
+#!/bin/sh
+
+## Default values
+directory=$(pwd)
+mode="last"
+
+## Check if $EDITOR or $VISUAL is set, if not set $EDITOR to "vi"
+if [ -z "$EDITOR" ] && [ -z "$VISUAL" ]; then
+  EDITOR="vi"
+elif [ -n "$EDITOR" ]; then
+  EDITOR="$EDITOR"
+elif [ -n "$VISUAL" ]; then
+  EDITOR="$VISUAL"
+fi
+
+## Check if $MOLE_RC is set, if not - error
+if [ -z "$MOLE_RC" ]; then
+  echo "MOLE_RC not set"<&2
+  exit 1
+fi
+
+export POSIXLY_CORRECT=YES
+
+## Checkn if file $MOLE_RC exists, if not - create it and directories if needed
+if [ -f "$(realpath "$MOLE_RC")" ]; then
+    mole_rc=$(realpath "$MOLE_RC")
+else
+  mkdir -p "$(dirname "$MOLE_RC")"
+  touch "$MOLE_RC"
+  echo "GROUPS" >> "$MOLE_RC"
+  echo "FILES" >> "$MOLE_RC"
+  mole_rc=$(realpath "$MOLE_RC")
+fi
+
+## Print help function
+print_help() {
+  echo "Usage:
+mole -h
+mole [-g GROUP] FILE
+mole [-m] [FILTERS] [DIRECTORY]
+mole list [FILTERS] [DIRECTORY]"
+}
+
+## Open file with $EDITOR and add it to $MOLE_RC logs if it exists
+open_file(){
+  if [ -n "$filename" ]; then
+    if [ -f "$filename" ]; then
+      $EDITOR "$filename"
+      echo "$(awk '1;/FILES/{ print "'"$filename"';'"$(date +"%Y-%m-%d;%H-%M-%S")"'"}' "$mole_rc")" > "$mole_rc"
+      exit
+    else
+      echo "File doesn't exist"<&2
+      exit
+    fi
+  fi
+}
+
+## Add file to group
+groups(){
+
+  ## Check if group provided
+  if [ -z "$group_arg" ]; then
+    echo "No group specified"<&2
+    exit
+  fi
+
+  ## Check if file provided
+  if [ -z "$filename" ]; then
+    echo "No file specified"<&2
+    exit
+  fi
+
+  ## Check if group exists and if file exists in group
+  if grep -Fxq ":$group_arg" "$mole_rc"; then
+    groups=$(awk '/GROUPS/{flag=1;next}/FILES/{flag=0}flag' "$mole_rc")
+    for group_i in $groups; do
+      if [ "$group_i" = ":$group_arg" ]; then
+        filenames=$(awk '/:'"$group_arg"'/{flag=1;next}/(FILES|:)/{flag=0}flag' "$mole_rc")
+        for filename_j in $filenames; do
+          if [ "$filename_j" = "$filename" ]; then
+            find="1"
+            break
+          fi
+        done
+      fi
+    done
+
+    ## Add file to group if it doesn't exist in group or exit if it does
+    if [ "$find" = "1" ]; then
+      echo "File already exists in group '$group_arg'"<&2
+    else
+      echo "$(awk '1;/'":$group_arg"'/{ print "'"$filename"'"}' "$mole_rc")" > "$mole_rc"
+    fi
+
+  ## Create group if it doesn't exist and add file to it
+  else
+      echo "$(awk '1;/GROUPS/{ print ":'"$group_arg"'"}' "$mole_rc")" > "$mole_rc"
+      echo "$(awk '1;/'":$group_arg"'/{ print "'"$filename"'"}' "$mole_rc")" > "$mole_rc"
+  fi
+
+  ## open file
+  open_file
+}
+
+## Сheck max length of filename in provided input using awk
+max_filename(){
+
+  max_len=$(echo "$1" | awk '
+  {
+    max_len = 0;
+    for (i = 1; i <= NF; i++) {
+      if (length($i) > max_len) {
+        max_len = length($i);
+      }
+    }
+  }
+  END {print max_len;}')
+}
+
+## List files in $directory using provided filters
+list_group(){
+    ## Filter by date
+    if [ -z "$start_date" ] && [ -n "$end_date" ]; then
+        files=$(awk '/FILES/{flag=1;next}/END/{flag=0}flag' "$mole_rc" |
+          awk -F";" '{print $1, $3}' |
+          awk -v start_date="$start_date" -v end_date="$end_date" '$2 <= end_date {print $1}' |
+          tr ' ' '\n' | sort | uniq)
+    elif [ -n "$start_date" ] && [ -z "$end_date" ]; then
+        files=$(awk '/FILES/{flag=1;next}/END/{flag=0}flag' "$mole_rc" |
+          awk -F";" '{print $1, $3}' |
+          awk -v start_date="$start_date" -v end_date="$end_date" '$2 >= start_date {print $1}' |
+          tr ' ' '\n' | sort | uniq)
+    elif [ -z "$start_date" ] && [ -z "$end_date" ]; then
+        files=$(awk '/FILES/{flag=1;next}/END/{flag=0}flag' "$mole_rc" |
+          awk -F";" '{print $1}' |
+          tr ' ' '\n' | sort | uniq)
+    elif [ -n "$start_date" ] && [ -n "$end_date" ]; then
+        files=$(awk '/FILES/{flag=1;next}/END/{flag=0}flag' "$mole_rc" |
+          awk -F";" '{print $1, $3}' |
+          awk -v start_date="$start_date" -v end_date="$end_date" '$2 >= start_date && $2 <= end_date {print $1}' |
+          tr ' ' '\n' | sort | uniq)
+    fi
+
+    ## Check if group filter provided and split groups by ","
+    if [ -n "$group_arg" ]; then
+      target_groups=$(echo "$group_arg" | awk -F"," '{for(i=1;i<=NF;i++) print $i}')
+    fi
+
+    ## List files from $directory, check if file exists in $MOLE_RC and if it does, check if it's in target group
+    ## Date filter is already applied to $files
+    for target in "$directory"/*; do
+      for file in $files; do
+        if [ "$file" = "$target" ]; then
+          if [ -n "$target_groups" ]; then
+            for target_group in $target_groups; do
+              if grep -Fxq ":$target_group" "$mole_rc"; then
+                filenames=$(awk '/:'"$target_group"'/{flag=1;next}/(FILES|:)/{flag=0}flag' "$mole_rc")
+                for filename_j in $filenames; do
+                  if [ "$filename_j" = "$target" ]; then
+                    find="1"
+                    break
+                  fi
+                done
+                if [ "$find" != "1" ]; then
+                  ## If file is not in target group, continue to next file
+                  continue
+                fi
+              else
+                continue
+              fi
+            done
+          else
+            find="1"
+          fi
+
+          ## Add file to list of files to be displayed
+          if [ "$find" = "1" ]; then
+            unset find
+            files1=$files1$(basename "$target")":"
+          else
+            unset find
+            continue
+          fi
+
+          groups=$(awk '/GROUPS/{flag=1;next}/FILES/{flag=0}flag' "$mole_rc")
+
+          for group_i in $groups; do
+            if test "${group_i#*":"}" != "$group_i"; then
+              filenames=$(awk '/'"$group_i"'/{flag=1;next}/(FILES|:)/{flag=0}flag' "$mole_rc")
+              for filename in $filenames; do
+                if [ "$filename" = "$target" ]; then
+                  ## Add group to list
+                  files1="$files1,$(echo "$group_i" | sed 's/://g')"
+                  found=1
+                fi
+              done
+            fi
+          done
+          if [ -z "$found" ]; then
+            ## If file is not in any group, add "-" to list
+            files1="$files1-"
+          fi
+          ## Add space to list
+          files1="$files1"" "
+          unset found
+        fi
+      done
+    done
+
+    ## Get max filename length from list
+    max_filename "$(echo "$files1" | awk '{for(i=1;i<=NF;i++) print $i}' | awk -F":" '{print $1}')"
+    ## Add 1 to max filename length for ":"
+    max_len=$((max_len+1))
+
+    ## Print list in format FILE: GROUP1,GROUP2,GROUP3
+    for i in $files1; do
+      filename=$(echo "$i" | awk -F":" '{print $1}')
+      fs=$(printf "%-${max_len}s" "$filename:" | tr '\n' ' ')
+      grps=$(echo "$i" | awk -F":" '{print $2}')
+      grps=$(echo "$grps" | sed 's/^,//g' | sed 's/,$//g' | tr '\n' ' ')
+      gr=$(printf " %s\n" "$grps")
+      out="$fs$gr"
+      echo "$out"
+    done
+}
+
+## Open file based on mode "most" or "last"
+mode_open(){
+    ## Check if group filter provided and split groups by ","
+    if [ -n "$group_arg" ]; then
+      target_groups=$(echo "$group_arg" | awk -F"," '{for(i=1;i<=NF;i++) print $i}')
+    fi
+    ## Set position of needed info based on mode
+    if [ "$mode" = "most" ]; then
+      position=1
+    elif [ "$mode" = "last" ]; then
+      position=3
+    fi
+
+    ## Filter files by date
+    if [ -z "$start_date" ] && [ -n "$end_date" ]; then
+          tmp=$(awk '/FILES/{flag=1;next}/END/{flag=0}flag' "$mole_rc" |
+            awk -F";" '{print $1, $3}' |
+            awk -v start_date="$start_date" -v end_date="$end_date" '$2 <= end_date {print $'"$position"'}' |
+            tr ' ' '\n' | sort )
+    elif [ -n "$start_date" ] && [ -z "$end_date" ]; then
+          tmp=$(awk '/FILES/{flag=1;next}/END/{flag=0}flag' "$mole_rc" |
+            awk -F";" '{print $1, $3}' |
+            awk -v start_date="$start_date" -v end_date="$end_date" '$2 >= start_date {print $'"$position"'}' |
+            tr ' ' '\n' | sort )
+    elif [ -z "$start_date" ] && [ -z "$end_date" ]; then
+          tmp=$(awk '/FILES/{flag=1;next}/END/{flag=0}flag' "$mole_rc" |
+            awk -F";" '{print $'"$position"'}' |
+            tr ' ' '\n' | sort )
+    elif [ -n "$start_date" ] && [ -n "$end_date" ]; then
+          tmp=$(awk '/FILES/{flag=1;next}/END/{flag=0}flag' "$mole_rc" |
+          awk -F";" '{print $1, $3}' |
+          awk -v start_date="$start_date" -v end_date="$end_date" '$2 >= start_date && $2 <= end_date {print $'"$position"'}' |
+          tr ' ' '\n' | sort )
+    fi
+
+    ## Check if files found
+    if [ -z "$tmp" ]; then
+      echo "No files found"<&2
+      exit 1
+    fi
+
+    ## Get most file
+    if [ $mode = "most" ]; then
+      most=$(echo "$tmp" | awk -F" " '{for(i=1;i<=NF;i++) print $i}' | uniq -c | sort -rn | awk '{print $2}' )
+      for file in $most; do
+        for file1 in "$directory"/*; do
+          if [ "$file" = "$file1" ]; then
+            if [ -n "$target_groups" ]; then
+              for group_j in $target_groups; do
+                if grep -Fxq ":$group_j" "$mole_rc"; then
+                  group_files=$(awk '/:'"$group_j"'/{flag=1;next}/(FILES|:)/{flag=0}flag' "$mole_rc")
+                    for group_file in $group_files; do
+                      if [ "$group_file" = "$file" ]; then
+                        unset filename
+                        filename=$file
+                        found=1
+                        break 5
+                      fi
+                    done
+                else
+                  unset filename
+                  filename=$file
+                  found=1
+                  break 4
+                fi
+              done
+            elif [ -z "$target_groups" ]; then
+              unset filename
+              filename=$file
+              found=1
+              break 3
+            fi
+          fi
+        done
+      done
+    ## Get last file
+    elif [ $mode = "last" ]; then
+      last=$(echo "$tmp" | awk -F" " '{for(i=1;i<=NF;i++) print $i}' | uniq -c | awk '{print $2}' | sort -rn)
+      for date in $last; do
+        filenames=$(awk '/FILES/{flag=1;next}/END/{flag=0}flag' "$mole_rc" | awk -F";" -v date="$date" '$3==date {print $1}')
+          for filename in $filenames; do
+            for file in "$directory"/*; do
+              if [ "$file" = "$filename" ]; then
+                if [ -n "$target_groups" ]; then
+                  for group_j in $target_groups; do
+                    if grep -Fxq ":$group_j" "$mole_rc"; then
+                      group_files=$(awk '/:'"$group_j"'/{flag=1;next}/(FILES|:)/{flag=0}flag' "$mole_rc")
+                      for group_file in $group_files; do
+                        if [ "$group_file" = "$file" ]; then
+                          unset filename
+                          filename=$file
+                          found=1
+                          break 5
+                        fi
+                      done
+                    else
+                      unset filename
+                      filename=$file
+                      found=1
+                      break 4
+                    fi
+                  done
+                elif [ -z "$target_groups" ]; then
+                  unset filename
+                  filename=$file
+                  found=1
+                  break 3
+                fi
+              fi
+            done
+          done
+        done
+    fi
+
+    ## Check if file was found
+    if [ -z "$found" ]; then
+      echo "No files found"<&2
+      exit 1
+    fi
+
+    ## Open file
+    open_file
+}
+
+## Create a log file
+secret_log(){
+    ## Get date and set log name(Dir + log_name)
+    date=$(date +"%Y-%m-%d_%H-%M-%S")
+    log_name="$HOME/.mole/log_$USER""_""$date"".bz2"
+    ## If log directory doesn't exist, create it
+    if [ ! -d "$(dirname "$log_name")" ]; then
+      mkdir -p "$(dirname "$log_name")"
+    fi
+
+    ## Filter files by date
+    if [ -z "$start_date" ] && [ -n "$end_date" ]; then
+          tmp=$(awk '/FILES/{flag=1;next}/END/{flag=0}flag' "$mole_rc" |
+          awk -F";" '{print $1, $3, $5}' |
+          awk -v start_date="$start_date" -v end_date="$end_date" '$2 <= end_date {print $1";"$2";"$3}' |
+          tr ' ' '\n' )
+    elif [ -n "$start_date" ] && [ -z "$end_date" ]; then
+          tmp=$(awk '/FILES/{flag=1;next}/END/{flag=0}flag' "$mole_rc" |
+          awk -F";" '{print $1, $3, $5}' |
+          awk -v start_date="$start_date" -v end_date="$end_date" '$2 >= start_date {print $1";"$2";"$3}' |
+          tr ' ' '\n' )
+    elif [ -z "$start_date" ] && [ -z "$end_date" ]; then
+          tmp=$(awk '/FILES/{flag=1;next}/END/{flag=0}flag' "$mole_rc" |
+          awk -F";" '{print $1";"$2";"$3}' | tr ' ' '\n')
+    elif [ -n "$start_date" ] && [ -n "$end_date" ]; then
+          tmp=$(awk '/FILES/{flag=1;next}/END/{flag=0}flag' "$mole_rc" |
+          awk -F";" '{print $1, $3, $5}' |
+          awk -v start_date="$start_date" -v end_date="$end_date" '$2 >= start_date && $2 <= end_date {print $1";"$2";"$3}' |
+          tr ' ' '\n' )
+    fi
+
+    ## Check if files were found
+    if [ -z "$tmp" ]; then
+      echo "" | bzip2 - > "$log_name"
+      exit 1
+    fi
+
+    ## Sort the files lexicographically
+    sorted=$(echo "$tmp" | awk -F";" '{for(i=1;i<=NF;i++) print $1}' | awk '{print $1}' | sort -rn | uniq)
+    logs=""
+
+    ## Get the logs from all directories
+    if [ -z "$dirs" ]; then
+      for i in $sorted; do
+        j="$i"
+        log_file=$(echo "$tmp" | awk -F";" -v i="$i" '$1==i{print $2"_"$3}' | sort -rn )
+          for k in $log_file; do
+            j="$j;$k"
+          done
+          logs="$logs\n$j"
+      done
+    ## Get the logs from the given directories
+    elif [ -n "$dirs" ]; then
+      for i in $sorted; do
+        for ss in $dirs; do
+          if [ -n "$(realpath "$ss")" ]; then
+            for k in "$(realpath "$ss")"/*; do
+              if [ "$i" != "$k" ]; then
+                continue
+              fi
+
+              j="$i"
+              log_file=$(echo "$tmp" | awk -F";" -v i="$k" '$1==i{print $2"_"$3}' | sort -rn )
+
+              for s in $log_file; do
+                j="$j;$s"
+              done
+
+              logs="$logs\n$j"
+
+            done
+          fi
+        done
+      done
+    else
+      ## If no logs were found exit
+      echo "" | bzip2 - > "$log_name"
+      exit 1
+    fi
+
+    ## Create a bz2 file with the logs
+    echo "$logs" | grep -v '^$' | bzip2 - > "$log_name"
+}
+
+## Parse the arguments
+parse_args(){
+  case $1 in
+    list)
+      option="list"
+      shift
+      ;;
+    secret-log)
+      option="log"
+      shift
+      ;;
+  esac
+
+  while getopts ":hmg:a:b:" opt; do
+    case $opt in
+      ## Print help
+      h)
+        print_help
+        exit
+        ;;
+      ## Group
+      g)
+        group_arg="$OPTARG"
+        ;;
+      ## Mode
+      m)
+        mode="most"
+        ;;
+      ## Start date
+      a)
+        start_date="$OPTARG"
+        ;;
+      ## End date
+      b)
+        end_date="$OPTARG"
+        ;;
+      \?)
+        ;;
+    esac
+  done
+
+  shift $((OPTIND - 1))
+  case $1 in
+    * )
+      if [ "$option" = "log" ]; then
+        while [ -n "$1" ]; do
+          dirs="$dirs $1"
+          shift
+        done
+      elif [ -f "$1" ]; then
+        filename=$(readlink -f "$1")
+      elif  [ -n "$1" ]; then
+        if [ ! -d "$(realpath "$1")" ]; then
+          echo "Directory does not exist"<&2
+          exit 1
+        else
+          directory=$(realpath "$1")
+        fi
+      else
+        directory=$(pwd)
+      fi
+      ;;
+  esac
+
+  if [ "$option" = "list" ]; then
+    list_group
+  elif [ "$option" = "log" ]; then
+    secret_log
+  elif [ -n "$group_arg" ] && [ -n "$filename" ]; then
+    groups
+  elif [ -z "$option" ] && [ -z "$filename" ] && [ -n "$directory" ]; then
+    mode_open
+  elif [ -z "$option" ] && [ -n "$filename" ]; then
+    open_file
+  elif [ -z "$option" ] && [ -z "$filename" ] && [ -n "$directory" ]; then
+    echo "No file specified"<&2
+  fi
+}
+
+parse_args "$@"
+
+
+
